@@ -36,8 +36,8 @@ xcode-select --install
 ### Compilar
 
 ```bash
-git clone <url-deste-repositorio>
-cd "extraidor de .rar para mac"
+git clone https://github.com/BrenoRocha1/extrator-de-.rar-para-mac.git
+cd extrator-de-.rar-para-mac
 ./build.sh
 ```
 
