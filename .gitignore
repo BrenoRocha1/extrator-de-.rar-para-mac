@@ -1,0 +1,3 @@
+# App compilado (gerado pelo build.sh)
+*.app
+.DS_Store
