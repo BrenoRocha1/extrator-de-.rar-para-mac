@@ -4,3 +4,4 @@
 *.dmg
 .build/
 .dmg/
+vendor/

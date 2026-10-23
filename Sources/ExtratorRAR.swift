@@ -13,11 +13,11 @@ struct ExtratorRARApp: App {
     var body: some Scene {
         Window("Extrator RAR", id: "main") {
             ContentView(model: Extractor.shared)
-                .frame(minWidth: 440, minHeight: 540)
+                .frame(minWidth: 460, minHeight: 640)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 520, height: 640)
+        .defaultSize(width: 540, height: 720)
     }
 }
 
@@ -45,276 +45,6 @@ final class FinderService: NSObject {
             Extractor.shared.enqueue(urls, mode: .compress)
         }
     }
-}
-
-// MARK: - Formatos e tarefas
-
-enum ArchiveFormat: String, CaseIterable, Identifiable {
-    case zip, sevenZip = "7z", rar
-
-    var id: String { rawValue }
-    var fileExtension: String { rawValue }
-    var title: String { rawValue.uppercased() }
-
-    var summary: String {
-        switch self {
-        case .zip: "Abre em qualquer computador, sem instalar nada"
-        case .sevenZip: "Arquivo menor; o destino precisa do 7-Zip ou similar"
-        case .rar: "Formato do WinRAR; precisa do programa rar instalado"
-        }
-    }
-
-    /// ZIP e 7Z usam o bsdtar do macOS. RAR é um formato fechado: só o programa oficial `rar` cria.
-    var isAvailable: Bool { self != .rar || Extractor.findTool("rar") != nil }
-}
-
-struct Job: Identifiable {
-    enum Kind { case extract, compress(ArchiveFormat) }
-    enum Status { case waiting, running, done(URL), failed(String) }
-
-    let id = UUID()
-    let source: URL
-    let kind: Kind
-    var status: Status = .waiting
-    var currentFile = ""
-}
-
-extension Job {
-    var isFinished: Bool {
-        switch status { case .done, .failed: true; default: false }
-    }
-
-    var isCompression: Bool {
-        if case .compress = kind { return true }
-        return false
-    }
-}
-
-// MARK: - Extração e compactação
-
-@MainActor
-final class Extractor: ObservableObject {
-    static let shared = Extractor()
-
-    enum Mode { case automatic, extract, compress }
-
-    @Published var jobs: [Job] = []
-    @Published var openFolderWhenDone = true
-    @Published var format: ArchiveFormat {
-        didSet { UserDefaults.standard.set(format.rawValue, forKey: "format") }
-    }
-    let hasUnar = findTool("unar") != nil
-    private var isRunning = false
-
-    init() {
-        format = UserDefaults.standard.string(forKey: "format").flatMap(ArchiveFormat.init) ?? .zip
-    }
-
-    static let archiveExtensions: Set<String> = ["rar", "zip", "7z", "tar", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "cab", "lzh", "lha", "cpio", "xar"]
-
-    /// No modo automático, pastas e arquivos comuns são compactados e arquivos compactados são extraídos.
-    func enqueue(_ urls: [URL], mode: Mode) {
-        for url in urls where !jobs.contains(where: { $0.source == url && !$0.isFinished }) {
-            let isFolder = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            let isArchive = Self.archiveExtensions.contains(url.pathExtension.lowercased())
-            let shouldExtract = switch mode {
-            case .extract: !isFolder
-            case .compress: false
-            case .automatic: !isFolder && isArchive
-            }
-            jobs.append(Job(source: url, kind: shouldExtract ? .extract : .compress(format)))
-        }
-        runNext()
-    }
-
-    func clearFinished() {
-        jobs.removeAll { $0.isFinished }
-    }
-
-    private func runNext() {
-        guard !isRunning, let index = jobs.firstIndex(where: { if case .waiting = $0.status { true } else { false } }) else { return }
-        isRunning = true
-        jobs[index].status = .running
-        let job = jobs[index]
-
-        Task.detached {
-            let progress: @Sendable (String) -> Void = { name in
-                Task { @MainActor in self.update(job.id) { $0.currentFile = name } }
-            }
-            let result = switch job.kind {
-            case .extract: Self.extract(job.source, progress: progress)
-            case .compress(let format): Self.compress(job.source, as: format, progress: progress)
-            }
-            await MainActor.run {
-                self.update(job.id) { $0.status = result }
-                if case .done(let output) = result, self.openFolderWhenDone {
-                    NSWorkspace.shared.activateFileViewerSelecting([output])
-                }
-                self.isRunning = false
-                self.runNext()
-            }
-        }
-    }
-
-    private func update(_ id: UUID, _ change: (inout Job) -> Void) {
-        if let i = jobs.firstIndex(where: { $0.id == id }) { change(&jobs[i]) }
-    }
-
-    /// Extrai para uma pasta ao lado do arquivo, com o mesmo nome dele.
-    nonisolated static func extract(_ archive: URL, progress: @escaping @Sendable (String) -> Void) -> Job.Status {
-        var name = archive.deletingPathExtension().lastPathComponent
-        // "filme.part1.rar" -> "filme"
-        if let range = name.range(of: #"\.part0*1$"#, options: [.regularExpression, .caseInsensitive]) {
-            name.removeSubrange(range)
-        }
-        let destination = uniqueURL(in: archive.deletingLastPathComponent(), name: name)
-        do {
-            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        } catch {
-            return .failed("Não foi possível criar a pasta: \(error.localizedDescription)")
-        }
-
-        // Primeiro tenta o bsdtar do macOS (libarchive: RAR4, RAR5, ZIP, 7z, TAR...).
-        var result = run("/usr/bin/bsdtar", ["-xvf", archive.path, "-C", destination.path], progress: progress)
-
-        // RAR com senha ou dividido em partes: usa o unar, se estiver instalado.
-        if result.status != 0, let unar = findTool("unar") {
-            var args = ["-force-overwrite", "-no-directory", "-output-directory", destination.path, archive.path]
-            result = run(unar, args, progress: progress)
-            if result.status != 0, result.output.localizedCaseInsensitiveContains("password") {
-                guard let password = askPassword(for: archive) else {
-                    try? FileManager.default.removeItem(at: destination)
-                    return .failed("Cancelado (arquivo protegido por senha).")
-                }
-                args.insert(contentsOf: ["-password", password], at: 0)
-                result = run(unar, args, progress: progress)
-            }
-        }
-
-        if result.status == 0 { return .done(destination) }
-
-        removeIfEmpty(destination)
-        var message = errorMessage(result)
-        if findTool("unar") == nil {
-            message += "\n\nDica: para RAR com senha ou dividido em partes, instale o unar no Terminal:\nbrew install unar"
-        }
-        return .failed(message)
-    }
-
-    /// Compacta uma pasta (ou arquivo) num arquivo ao lado dela: "Fotos" -> "Fotos.zip".
-    nonisolated static func compress(_ source: URL, as format: ArchiveFormat, progress: @escaping @Sendable (String) -> Void) -> Job.Status {
-        let parent = source.deletingLastPathComponent()
-        let isFolder = (try? source.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-        let baseName = isFolder ? source.lastPathComponent : source.deletingPathExtension().lastPathComponent
-        let destination = uniqueURL(in: parent, name: baseName, extension: format.fileExtension)
-
-        let result: (status: Int32, output: String)
-        switch format {
-        case .zip, .sevenZip:
-            // -C entra na pasta de cima, assim o arquivo guarda "Fotos/..." e não o caminho inteiro.
-            result = run("/usr/bin/bsdtar", ["-c", "--format", format == .zip ? "zip" : "7zip", "--exclude", ".DS_Store",
-                                             "-v", "-f", destination.path, "-C", parent.path, source.lastPathComponent],
-                         progress: progress)
-        case .rar:
-            guard let rar = findTool("rar") else {
-                return .failed("Para criar .rar é preciso o programa oficial \"rar\" (da RARLAB, a empresa do WinRAR).\n\nEscolha ZIP, que abre em qualquer computador, ou veja no README como instalar o rar.")
-            }
-            // a = adicionar, -r = incluir subpastas, -ep1 = guardar só a partir de "Fotos/"
-            result = run(rar, ["a", "-r", "-ep1", "-x*.DS_Store", destination.path, source.path], progress: progress)
-        }
-
-        if result.status == 0 { return .done(destination) }
-        try? FileManager.default.removeItem(at: destination)
-        return .failed(errorMessage(result))
-    }
-
-    nonisolated private static func run(_ tool: String, _ args: [String], progress: @escaping @Sendable (String) -> Void) -> (status: Int32, output: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tool)
-        process.arguments = args
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        let collected = OutputBuffer()
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            collected.append(text)
-            if let last = text.split(whereSeparator: \.isNewline).last {
-                progress(fileName(fromLogLine: String(last)))
-            }
-        }
-
-        do { try process.run() } catch { return (-1, error.localizedDescription) }
-        process.waitUntilExit()
-        pipe.fileHandleForReading.readabilityHandler = nil
-        return (process.terminationStatus, collected.text)
-    }
-
-    /// bsdtar imprime "x arquivo" (extraindo) ou "a arquivo" (compactando); o rar imprime "Adding  arquivo  OK".
-    nonisolated private static func fileName(fromLogLine line: String) -> String {
-        var name = line.trimmingCharacters(in: .whitespaces)
-        if name.hasPrefix("x ") || name.hasPrefix("a ") { name.removeFirst(2) }
-        if name.hasPrefix("Adding") {
-            name = String(name.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-            if name.hasSuffix("OK") { name = String(name.dropLast(2)).trimmingCharacters(in: .whitespaces) }
-        }
-        return name
-    }
-
-    nonisolated private static func errorMessage(_ result: (status: Int32, output: String)) -> String {
-        let message = result.output.split(separator: "\n").suffix(3).joined(separator: "\n")
-        return message.isEmpty ? "Erro desconhecido (código \(result.status))." : message
-    }
-
-    /// "Fotos" -> "Fotos 2" -> "Fotos 3"... até achar um nome livre.
-    nonisolated private static func uniqueURL(in parent: URL, name: String, extension ext: String? = nil) -> URL {
-        func url(_ base: String) -> URL {
-            let file = parent.appendingPathComponent(base)
-            return ext.map { file.appendingPathExtension($0) } ?? file
-        }
-        var candidate = url(name)
-        var n = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = url("\(name) \(n)")
-            n += 1
-        }
-        return candidate
-    }
-
-    nonisolated private static func removeIfEmpty(_ folder: URL) {
-        if let items = try? FileManager.default.contentsOfDirectory(atPath: folder.path), items.isEmpty {
-            try? FileManager.default.removeItem(at: folder)
-        }
-    }
-
-    nonisolated static func findTool(_ name: String) -> String? {
-        ["/opt/homebrew/bin", "/usr/local/bin"]
-            .map { "\($0)/\(name)" }
-            .first { FileManager.default.isExecutableFile(atPath: $0) }
-    }
-
-    nonisolated private static func askPassword(for archive: URL) -> String? {
-        DispatchQueue.main.sync {
-            let alert = NSAlert()
-            alert.messageText = "Senha necessária"
-            alert.informativeText = "\"\(archive.lastPathComponent)\" está protegido por senha."
-            let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-            alert.accessoryView = field
-            alert.addButton(withTitle: "Extrair")
-            alert.addButton(withTitle: "Cancelar")
-            alert.window.initialFirstResponder = field
-            return alert.runModal() == .alertFirstButtonReturn ? field.stringValue : nil
-        }
-    }
-}
-
-final class OutputBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage = ""
-    func append(_ s: String) { lock.lock(); storage += s; lock.unlock() }
-    var text: String { lock.lock(); defer { lock.unlock() }; return storage }
 }
 
 // MARK: - Interface
@@ -354,10 +84,13 @@ struct ContentView: View {
             .padding(.bottom, 14)
 
             if tab == .compress {
-                FormatPicker(format: $model.format)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 14)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                VStack(alignment: .leading, spacing: 12) {
+                    FormatPicker(format: $model.format)
+                    CompressExtras(model: model)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 14)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             DropZone(tab: tab, compact: compact, isTargeted: isTargeted, action: chooseFiles)
@@ -440,18 +173,17 @@ struct ContentView: View {
                     .controlSize(.small)
                     .fixedSize()
                 Spacer(minLength: 0)
-                if tab == .extract && !model.hasUnar {
-                    // Mostra a dica mais longa que couber na largura da janela.
+                // Mostra a dica mais longa que couber na largura da janela.
+                if tab == .extract {
                     ViewThatFits {
-                        Label("Senha ou várias partes? brew install unar", systemImage: "info.circle")
-                        Label("brew install unar", systemImage: "info.circle")
-                        Image(systemName: "info.circle")
+                        Label("Com senha ou em partes? Também abre", systemImage: "lock.open")
+                        Image(systemName: "lock.open")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .help("Para abrir RAR com senha ou dividido em partes, rode no Terminal: brew install unar")
-                } else if tab == .compress {
+                    .help("Arquivos com senha: o app pergunta a senha. Arquivos em partes: solte qualquer uma das partes.")
+                } else {
                     ViewThatFits {
                         Label("Dica: botão direito na pasta → Serviços", systemImage: "cursorarrow.click.2")
                         Image(systemName: "cursorarrow.click.2")
@@ -511,12 +243,92 @@ struct FormatPicker: View {
                 }
                 Spacer(minLength: 0)
             }
-            Label(format.summary, systemImage: format.isAvailable ? "checkmark.circle" : "exclamationmark.circle")
+            Label(format.summary, systemImage: "info.circle")
                 .font(.caption)
-                .foregroundStyle(format.isAvailable ? Color.secondary : Color.orange)
+                .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// Senha e divisão em partes, na aba Compactar.
+struct CompressExtras: View {
+    @ObservedObject var model: Extractor
+    @State private var showPassword = false
+
+    private var enabled: Bool { model.format.supportsPasswordAndParts }
+
+    /// Desmarcada enquanto o formato não aceita a opção, sem perder a escolha da pessoa.
+    private func whenEnabled(_ value: Binding<Bool>) -> Binding<Bool> {
+        Binding(get: { enabled && value.wrappedValue }, set: { value.wrappedValue = $0 })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Toggle(isOn: whenEnabled($model.usePassword)) {
+                    Label("Proteger com senha", systemImage: "lock.fill")
+                }
+                .fixedSize()
+                if model.usePassword && enabled {
+                    Group {
+                        if showPassword {
+                            TextField("Senha", text: $model.password)
+                        } else {
+                            SecureField("Senha", text: $model.password)
+                        }
+                    }
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 200)
+                    Button {
+                        showPassword.toggle()
+                    } label: {
+                        Image(systemName: showPassword ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(showPassword ? "Esconder a senha" : "Mostrar a senha")
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 24)
+
+            HStack(spacing: 10) {
+                Toggle(isOn: whenEnabled($model.splitIntoParts)) {
+                    Label("Dividir em partes", systemImage: "square.split.2x1")
+                }
+                .fixedSize()
+                if model.splitIntoParts && enabled {
+                    Picker("Tamanho de cada parte", selection: $model.volumeMB) {
+                        ForEach(Extractor.volumeSizes, id: \.mb) { Text($0.label).tag($0.mb) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 24)
+
+            if !enabled {
+                Label("Senha e partes em .rar precisam do programa oficial rar. Em .zip e .7z funcionam sem instalar nada.",
+                      systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if model.usePassword && model.format == .zip {
+                Label("No Windows, .zip com senha abre pelo 7-Zip ou WinRAR (a criptografia é AES-256).",
+                      systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .disabled(!enabled)
+        .animation(.easeInOut(duration: 0.2), value: model.usePassword)
+        .animation(.easeInOut(duration: 0.2), value: model.splitIntoParts)
     }
 }
 
@@ -528,13 +340,8 @@ struct FormatChip: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                Text(".\(format.fileExtension)")
-                    .font(.callout.weight(.semibold).monospaced())
-                if !format.isAvailable {
-                    Image(systemName: "lock.fill").font(.caption2)
-                }
-            }
+            Text(".\(format.fileExtension)")
+                .font(.callout.weight(.semibold).monospaced())
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
             .foregroundStyle(selected ? Color.white : (colorScheme == .dark ? Color.brandLight : Color.brand))
@@ -627,7 +434,7 @@ struct DropZone: View {
                     }
                     .padding(.horizontal, 16)
                     .frame(maxWidth: .infinity)
-                    .frame(minHeight: 240, maxHeight: .infinity)
+                    .frame(minHeight: tab == .compress ? 180 : 240, maxHeight: .infinity)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -707,7 +514,8 @@ struct JobRow: View {
     private var kindLabel: String {
         switch job.kind {
         case .extract: "extrair"
-        case .compress(let format): "→ .\(format.fileExtension)"
+        case .compress(let options):
+            "→ .\(options.format.fileExtension)" + (options.password != nil ? " 🔒" : "") + (options.volumeMB != nil ? " ✂︎" : "")
         }
     }
 
