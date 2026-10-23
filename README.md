@@ -10,6 +10,12 @@
   <img src="https://img.shields.io/badge/Swift-SwiftUI-orange" alt="Swift">
 </p>
 
+<p align="center">
+  <a href="https://github.com/BrenoRocha1/extrator-de-.rar-para-mac/releases/latest/download/Extrator-RAR.dmg">
+    <img src="https://img.shields.io/badge/Baixar%20para%20Mac-.dmg-6B40F0?style=for-the-badge&logo=apple&logoColor=white" alt="Baixar para Mac">
+  </a>
+</p>
+
 O macOS não vem com o WinRAR e não abre arquivos `.rar` sozinho. Este projeto é um app nativo, pequeno e gratuito, que resolve isso: você arrasta o `.rar` para a janela e ele é extraído.
 
 Além de `.rar` (RAR4 e RAR5), o app também abre `.zip`, `.7z`, `.tar`, `.gz` e outros formatos compactados.
@@ -39,16 +45,60 @@ Além de `.rar` (RAR4 e RAR5), o app também abre `.zip`, `.7z`, `.tar`, `.gz` e
 
 ## Instalação
 
-### Requisitos
+Existem duas formas de instalar. **Se você não mexe com programação, use a Opção 1.**
 
-- macOS 14 (Sonoma) ou mais novo
-- Xcode Command Line Tools, que trazem o compilador `swiftc`. Para instalar:
+| | Opção 1: baixar o instalador | Opção 2: compilar o código |
+|---|---|---|
+| Para quem | Qualquer pessoa | Quem quer ver ou mudar o código |
+| Precisa de Terminal? | Não | Sim |
+| Precisa instalar algo antes? | Não | Xcode Command Line Tools |
+| Tempo | 1 minuto | 5 minutos |
+
+Requisito das duas: **macOS 14 (Sonoma) ou mais novo**, em Mac com Apple Silicon (M1, M2, M3…) ou com Intel.
+
+### Opção 1: baixar o instalador (mais fácil)
+
+1. **Baixe o instalador:** [**Extrator-RAR.dmg**](https://github.com/BrenoRocha1/extrator-de-.rar-para-mac/releases/latest/download/Extrator-RAR.dmg)
+   (ou acesse a página de [Releases](https://github.com/BrenoRocha1/extrator-de-.rar-para-mac/releases) e clique em `Extrator-RAR.dmg`).
+2. **Abra o arquivo baixado.** Ele fica na pasta *Downloads*. Uma janela vai aparecer com o app e um atalho para a pasta **Aplicativos**.
+3. **Arraste o Extrator RAR para a pasta Aplicativos**, dentro dessa mesma janela.
+4. **Abra o app pela primeira vez** (veja o aviso abaixo).
+5. Pronto. Pode ejetar o "Extrator RAR" que apareceu na barra lateral do Finder e apagar o `.dmg`.
+
+#### ⚠️ Aviso na primeira vez que abrir
+
+O app é gratuito e não foi publicado na App Store, então o macOS mostra um aviso parecido com *"Não foi possível verificar o app"*. Isso é normal e só acontece uma vez. Para liberar:
+
+**No macOS 15 (Sequoia) ou mais novo:**
+1. Tente abrir o app e clique em **OK** (ou **Concluído**) no aviso.
+2. Abra **Ajustes do Sistema** → **Privacidade e Segurança**.
+3. Role até o fim da página e clique em **Abrir Mesmo Assim**, ao lado da mensagem sobre o Extrator RAR.
+4. Confirme com sua senha do Mac e clique em **Abrir**.
+
+**No macOS 14 (Sonoma):**
+1. Na pasta Aplicativos, clique com o **botão direito** no Extrator RAR → **Abrir**.
+2. No aviso, clique em **Abrir**.
+
+<details>
+<summary>Prefere usar o Terminal? Clique aqui</summary>
+
+Este comando remove a marca de "baixado da internet" do app, e o aviso não aparece mais:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Extrator RAR.app"
+```
+
+</details>
+
+### Opção 2: compilar o código
+
+1. Instale as ferramentas de desenvolvedor da Apple (traz o compilador `swiftc`):
 
 ```bash
 xcode-select --install
 ```
 
-### Compilar
+2. Baixe o código e compile:
 
 ```bash
 git clone https://github.com/BrenoRocha1/extrator-de-.rar-para-mac.git
@@ -56,17 +106,17 @@ cd extrator-de-.rar-para-mac
 ./build.sh
 ```
 
-O app gerado fica em `Extrator RAR.app`, dentro da pasta do projeto.
-
-### Instalar na pasta Aplicativos
+3. Copie o app gerado para a pasta Aplicativos:
 
 ```bash
 ditto "Extrator RAR.app" "/Applications/Extrator RAR.app"
 ```
 
-> Na primeira vez que abrir o app, o macOS pode bloquear, porque ele não foi baixado da App Store. Se acontecer, clique com o botão direito no app → **Abrir** → **Abrir**. Depois disso ele abre normalmente.
+Como o app foi compilado no seu próprio Mac, o aviso da primeira abertura não aparece.
 
 ### (Opcional) Suporte a senha e a arquivos divididos em partes
+
+Vale para as duas opções. Se você tem o [Homebrew](https://brew.sh), rode no Terminal:
 
 ```bash
 brew install unar
@@ -164,6 +214,7 @@ Se a mensagem de erro mencionar `password`, o app mostra uma janela pedindo a se
 ├── assets/                 # Logo e capturas de tela usadas neste README
 ├── Info.plist              # Metadados do app e tipos de arquivo que ele abre
 ├── build.sh                # Compila e monta o "Extrator RAR.app"
+├── release.sh              # Gera o instalador Extrator-RAR.dmg
 └── README.md
 ```
 
@@ -183,12 +234,29 @@ Se a mensagem de erro mencionar `password`, o app mostra uma janela pedindo a se
 ### `build.sh`
 
 1. Apaga o `.app` anterior e cria a estrutura de pastas (`Contents/MacOS`, `Contents/Resources`).
-2. Compila o Swift com `swiftc -O -parse-as-library`.
+2. Compila o Swift com `swiftc -O -parse-as-library` duas vezes, uma para Apple Silicon (`arm64`) e outra para Intel (`x86_64`), e junta as duas com o `lipo`. O resultado é um app "universal" que roda em qualquer Mac.
 3. Copia o `Info.plist`.
 4. Roda o `MakeIcon.swift`, que desenha a logo (caixa com zíper e seta saindo) em vários tamanhos, e converte o resultado para `.icns` com o `iconutil`.
 5. Assina o app com uma assinatura local (`codesign --sign -`), que o macOS exige para rodar apps em Macs com Apple Silicon.
 
 O projeto não usa Xcode nem `.xcodeproj`: basta o compilador de linha de comando.
+
+### `release.sh` (para publicar uma nova versão)
+
+Gera o `Extrator-RAR.dmg`, o instalador da Opção 1:
+
+1. Roda o `build.sh` para gerar o app universal.
+2. Monta uma pasta temporária com o app e um atalho chamado **Aplicativos** apontando para `/Applications`. É esse atalho que permite instalar só arrastando.
+3. Cria a imagem de disco comprimida com o `hdiutil`.
+
+Para publicar uma versão nova no GitHub:
+
+```bash
+./release.sh
+gh release create v1.x Extrator-RAR.dmg --title "Extrator RAR v1.x" --notes "O que mudou"
+```
+
+O link de download do README (`releases/latest/download/Extrator-RAR.dmg`) sempre aponta para a versão mais recente, então ele não precisa ser alterado.
 
 ---
 
@@ -196,4 +264,4 @@ O projeto não usa Xcode nem `.xcodeproj`: basta o compilador de linha de comand
 
 - RAR com senha e RAR em várias partes só funcionam com o `unar` instalado.
 - O app só **extrai**; ele não cria arquivos `.rar`. O formato RAR é proprietário, e só o WinRAR/`rar` oficial consegue criar esses arquivos.
-- O app não tem assinatura de desenvolvedor da Apple, por isso o aviso na primeira vez que ele é aberto.
+- O app não tem assinatura de desenvolvedor da Apple (que é paga), por isso o aviso na primeira vez que ele é aberto pelo instalador.
