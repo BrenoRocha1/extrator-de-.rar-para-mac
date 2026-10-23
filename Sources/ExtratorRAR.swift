@@ -18,6 +18,11 @@ struct ExtratorRARApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 540, height: 720)
+        .commands {
+            CommandGroup(replacing: .help) {
+                Button("Reportar um problema…") { Support.reportProblem() }
+            }
+        }
     }
 }
 
@@ -47,11 +52,68 @@ final class FinderService: NSObject {
     }
 }
 
+/// Contato para avisar de problemas: abre um e-mail já preenchido com a versão do app e do macOS.
+enum Support {
+    static let email = "brenohenrique91901@gmail.com"
+
+    static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+    }
+
+    static var reportURL: URL {
+        #if arch(arm64)
+        let chip = "Apple Silicon"
+        #else
+        let chip = "Intel"
+        #endif
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        let body = """
+        Olá! Encontrei um problema no Extrator RAR.
+
+        O que eu estava fazendo:
+
+
+        O que aconteceu:
+
+
+        ---
+        Extrator RAR \(appVersion) · macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion) · \(chip)
+        """
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Problema no Extrator RAR \(appVersion)"),
+            URLQueryItem(name: "body", value: body),
+        ]
+        return components.url!
+    }
+
+    @MainActor static func reportProblem() {
+        if NSWorkspace.shared.open(reportURL) { return }
+        // Sem app de e-mail configurado: copia o endereço e avisa.
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(email, forType: .string)
+        let alert = NSAlert()
+        alert.messageText = "E-mail copiado"
+        alert.informativeText = "Não encontrei um app de e-mail configurado. O endereço \(email) foi copiado: cole no seu e-mail e conte o que aconteceu."
+        alert.runModal()
+    }
+}
+
 // MARK: - Interface
 
 extension Color {
-    static let brand = Color(red: 0.42, green: 0.25, blue: 0.94)
-    static let brandLight = Color(red: 0.56, green: 0.36, blue: 1.0)
+    /// Amarelo das pastas do Explorador de Arquivos do Windows (#FFC83D) e um tom mais forte (#F2A600).
+    static let brand = Color(red: 1.0, green: 0.784, blue: 0.239)
+    static let brandDeep = Color(red: 0.949, green: 0.651, blue: 0.0)
+    /// Texto e ícones sobre o amarelo (marrom bem escuro, para ter contraste).
+    static let onBrand = Color(red: 0.24, green: 0.17, blue: 0.0)
+
+    /// Amarelo usado em textos e contornos: no modo claro, um âmbar escuro para ser legível no fundo branco.
+    static func brandInk(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? .brand : Color(red: 0.6, green: 0.39, blue: 0.0)
+    }
 }
 
 enum Tab: String, CaseIterable {
@@ -63,6 +125,8 @@ struct ContentView: View {
     @ObservedObject var model: Extractor
     @State var tab: Tab = .extract
     @State private var isTargeted = false
+    @AppStorage("welcomeShown") private var welcomeShown = false
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Com arquivos na lista, a área de soltar encolhe para dar espaço à lista.
     private var compact: Bool { !model.jobs.isEmpty }
@@ -108,6 +172,11 @@ struct ContentView: View {
         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: compact)
         .animation(.easeInOut(duration: 0.25), value: tab)
         .animation(.easeOut(duration: 0.15), value: isTargeted)
+        .tint(Color.brandInk(colorScheme))  // links, caixas de seleção e chaves no tom do app
+        // Boas-vindas só na primeira vez que o app abre.
+        .sheet(isPresented: Binding(get: { !welcomeShown }, set: { if !$0 { welcomeShown = true } })) {
+            WelcomeView { welcomeShown = true }
+        }
         .background(Color(nsColor: .windowBackgroundColor))
         .ignoresSafeArea(edges: .top)
     }
@@ -143,7 +212,8 @@ struct ContentView: View {
                     Button("Limpar concluídos") {
                         withAnimation { model.clearFinished() }
                     }
-                    .buttonStyle(.link)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.brandInk(colorScheme))
                     .font(.callout)
                 }
             }
@@ -193,6 +263,16 @@ struct ContentView: View {
                     .lineLimit(1)
                     .help("No Finder, clique com o botão direito numa pasta → Serviços → Compactar com Extrator RAR")
                 }
+                Button {
+                    Support.reportProblem()
+                } label: {
+                    Label("Reportar problema", systemImage: "envelope")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.brandInk(colorScheme))
+                .font(.caption)
+                .fixedSize()
+                .help("Abre um e-mail para \(Support.email) com a versão do app e do macOS já preenchidas")
             }
             .font(.callout)
             .padding(.horizontal, 24)
@@ -226,6 +306,74 @@ struct ContentView: View {
             panel.prompt = "Extrair"
         }
         if panel.runModal() == .OK { model.enqueue(panel.urls, mode: tab == .compress ? .compress : .extract) }
+    }
+}
+
+/// Tela de boas-vindas mostrada só na primeira abertura.
+struct WelcomeView: View {
+    let onStart: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(nsImage: NSApp?.applicationIconImage ?? NSImage())
+                .resizable()
+                .frame(width: 84, height: 84)
+
+            VStack(spacing: 6) {
+                Text("Bem-vindo ao Extrator RAR")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                Text("Versão \(Support.appVersion)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                tip("arrow.down.doc.fill", "Para extrair", "Arraste um .rar, .zip ou .7z para a janela.")
+                tip("archivebox.fill", "Para compactar", "Use a aba Compactar, ou clique com o botão direito numa pasta no Finder → Serviços.")
+                tip("envelope.fill", "Achou algum problema?",
+                    "Este app ainda é novo. Se algo der errado, clique em Reportar problema, no rodapé da janela, e me mande um e-mail. Eu corrijo o quanto antes.")
+            }
+            .padding(16)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.brand.opacity(colorScheme == .dark ? 0.1 : 0.16)))
+
+            Text(Support.email)
+                .font(.callout.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            Button(action: onStart) {
+                Text("Começar")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.onBrand)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.brand))
+                    .contentShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(28)
+        .frame(width: 420)
+    }
+
+    private func tip(_ icon: String, _ title: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.brandInk(colorScheme))
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.semibold))
+                Text(text)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
 
@@ -344,9 +492,9 @@ struct FormatChip: View {
                 .font(.callout.weight(.semibold).monospaced())
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
-            .foregroundStyle(selected ? Color.white : (colorScheme == .dark ? Color.brandLight : Color.brand))
+            .foregroundStyle(selected ? Color.onBrand : Color.brandInk(colorScheme))
             .background(
-                Capsule().fill(selected ? Color.brand : Color.brand.opacity(colorScheme == .dark ? 0.2 : 0.1))
+                Capsule().fill(selected ? Color.brand : Color.brand.opacity(colorScheme == .dark ? 0.16 : 0.22))
             )
             .contentShape(Capsule())
         }
@@ -364,7 +512,7 @@ struct DropZone: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var highlighted: Bool { isTargeted || isHovering }
-    private var accent: Color { colorScheme == .dark ? .brandLight : .brand }
+    private var accent: Color { .brandInk(colorScheme) }
 
     private var title: String {
         if isTargeted { return tab == .compress ? "Solte para compactar" : "Solte aqui" }
@@ -421,7 +569,7 @@ struct DropZone: View {
                                         .foregroundStyle(accent)
                                         .padding(.horizontal, 7)
                                         .padding(.vertical, 3)
-                                        .background(Capsule().fill(accent.opacity(colorScheme == .dark ? 0.2 : 0.12)))
+                                        .background(Capsule().fill(Color.brand.opacity(colorScheme == .dark ? 0.16 : 0.22)))
                                 }
                             }
                             .padding(.top, 2)
@@ -451,11 +599,11 @@ struct DropZone: View {
     private func badge(size: CGFloat, iconSize: CGFloat) -> some View {
         ZStack {
             Circle()
-                .fill(LinearGradient(colors: [.brandLight, .brand], startPoint: .top, endPoint: .bottom))
-                .shadow(color: Color.brand.opacity(0.35), radius: highlighted ? 10 : 5, y: 3)
+                .fill(LinearGradient(colors: [.brand, .brandDeep], startPoint: .top, endPoint: .bottom))
+                .shadow(color: Color.brandDeep.opacity(0.4), radius: highlighted ? 10 : 5, y: 3)
             Image(systemName: icon)
                 .font(.system(size: iconSize, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.onBrand)
                 .contentTransition(.symbolEffect(.replace))
         }
         .frame(width: size, height: size)
@@ -464,7 +612,7 @@ struct DropZone: View {
 
     private var background: some View {
         RoundedRectangle(cornerRadius: 18)
-            .fill(accent.opacity(highlighted ? 0.12 : 0.06))
+            .fill(Color.brand.opacity(highlighted ? (colorScheme == .dark ? 0.14 : 0.2) : (colorScheme == .dark ? 0.06 : 0.1)))
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
                     .strokeBorder(accent.opacity(highlighted ? 0.8 : (colorScheme == .dark ? 0.5 : 0.35)),
@@ -502,7 +650,13 @@ struct JobRow: View {
     }
 
     private var kindBadge: some View {
-        Text(kindLabel)
+        HStack(spacing: 4) {
+            Text(kindLabel)
+            if case .compress(let options) = job.kind {
+                if options.password != nil { Image(systemName: "lock.fill") }
+                if options.volumeMB != nil { Image(systemName: "square.split.2x1") }
+            }
+        }
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 6)
@@ -515,14 +669,14 @@ struct JobRow: View {
         switch job.kind {
         case .extract: "extrair"
         case .compress(let options):
-            "→ .\(options.format.fileExtension)" + (options.password != nil ? " 🔒" : "") + (options.volumeMB != nil ? " ✂︎" : "")
+            "→ .\(options.format.fileExtension)"
         }
     }
 
     private var tint: Color {
         switch job.status {
         case .waiting: .secondary
-        case .running: .brand
+        case .running: .brandDeep
         case .done: .green
         case .failed: .red
         }
@@ -554,7 +708,7 @@ struct JobRow: View {
             Text("Na fila").font(.caption).foregroundStyle(.secondary)
         case .running:
             VStack(alignment: .leading, spacing: 5) {
-                ProgressView().progressViewStyle(.linear).tint(.brand)
+                ProgressView().progressViewStyle(.linear).tint(.brandDeep)
                 Text(job.currentFile.isEmpty ? (job.isCompression ? "Compactando…" : "Extraindo…") : job.currentFile)
                     .font(.caption)
                     .foregroundStyle(.secondary)

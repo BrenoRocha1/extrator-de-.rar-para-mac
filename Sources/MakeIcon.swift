@@ -1,6 +1,7 @@
 import AppKit
 
-// Desenha a logo do app: caixa de arquivo com zíper e uma seta saindo dela.
+// Desenha a logo do app: caixa de arquivo com zíper e uma seta saindo dela,
+// sobre o amarelo das pastas do Explorador de Arquivos do Windows.
 // Uso: swift MakeIcon.swift <pasta .iconset> [logo.png]
 let out = URL(fileURLWithPath: CommandLine.arguments[1])
 try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
@@ -21,12 +22,12 @@ func drawLogo(in ctx: CGContext, size s: CGFloat) {
     let bgPath = CGPath(roundedRect: bg, cornerWidth: 185, cornerHeight: 185, transform: nil)
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 28, color: color(0x000000, 0.35))
-    ctx.addPath(bgPath); ctx.setFillColor(color(0x4B2BB8)); ctx.fillPath()
+    ctx.addPath(bgPath); ctx.setFillColor(color(0xE09A00)); ctx.fillPath()
     ctx.restoreGState()
 
     ctx.saveGState()
     ctx.addPath(bgPath); ctx.clip()
-    let bgGradient = CGGradient(colorsSpace: space, colors: [color(0x8E5CFF), color(0x5B34E0), color(0x2E1A8F)] as CFArray,
+    let bgGradient = CGGradient(colorsSpace: space, colors: [color(0xFFDD70), color(0xFFC83D), color(0xF2A600)] as CFArray,
                                 locations: [0, 0.55, 1])!
     ctx.drawLinearGradient(bgGradient, start: CGPoint(x: 200, y: 924), end: CGPoint(x: 824, y: 100), options: [])
     // brilho suave no topo
@@ -39,12 +40,12 @@ func drawLogo(in ctx: CGContext, size s: CGFloat) {
     let body = CGRect(x: 262, y: 232, width: 500, height: 390)
     let bodyPath = CGPath(roundedRect: body, cornerWidth: 64, cornerHeight: 64, transform: nil)
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -14), blur: 30, color: color(0x1A0B5C, 0.45))
+    ctx.setShadow(offset: CGSize(width: 0, height: -14), blur: 30, color: color(0x6B4400, 0.4))
     ctx.addPath(bodyPath); ctx.setFillColor(color(0xFFFFFF)); ctx.fillPath()
     ctx.restoreGState()
     ctx.saveGState()
     ctx.addPath(bodyPath); ctx.clip()
-    let bodyGradient = CGGradient(colorsSpace: space, colors: [color(0xFFFFFF), color(0xE6DEFF)] as CFArray, locations: [0, 1])!
+    let bodyGradient = CGGradient(colorsSpace: space, colors: [color(0xFFFFFF), color(0xFFF1CC)] as CFArray, locations: [0, 1])!
     ctx.drawLinearGradient(bodyGradient, start: CGPoint(x: 0, y: 622), end: CGPoint(x: 0, y: 232), options: [])
     ctx.restoreGState()
 
@@ -52,12 +53,12 @@ func drawLogo(in ctx: CGContext, size s: CGFloat) {
     let lid = CGRect(x: 236, y: 576, width: 552, height: 104)
     let lidPath = CGPath(roundedRect: lid, cornerWidth: 40, cornerHeight: 40, transform: nil)
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -8), blur: 18, color: color(0x1A0B5C, 0.35))
-    ctx.addPath(lidPath); ctx.setFillColor(color(0xF4F0FF)); ctx.fillPath()
+    ctx.setShadow(offset: CGSize(width: 0, height: -8), blur: 18, color: color(0x6B4400, 0.3))
+    ctx.addPath(lidPath); ctx.setFillColor(color(0xFFF8E6)); ctx.fillPath()
     ctx.restoreGState()
 
     // Zíper: dentes alternados descendo pelo meio da caixa
-    ctx.setFillColor(color(0x6A3FF0))
+    ctx.setFillColor(color(0xD08A00))
     let toothW: CGFloat = 34, toothH: CGFloat = 22, gap: CGFloat = 12
     var y: CGFloat = 548
     var left = true
@@ -71,9 +72,9 @@ func drawLogo(in ctx: CGContext, size s: CGFloat) {
     }
     // puxador do zíper
     let pull = CGPath(roundedRect: CGRect(x: 486, y: 252, width: 52, height: 64), cornerWidth: 16, cornerHeight: 16, transform: nil)
-    ctx.addPath(pull); ctx.setFillColor(color(0x4B2BB8)); ctx.fillPath()
+    ctx.addPath(pull); ctx.setFillColor(color(0x8A5A00)); ctx.fillPath()
     ctx.addPath(CGPath(roundedRect: CGRect(x: 502, y: 266, width: 20, height: 24), cornerWidth: 6, cornerHeight: 6, transform: nil))
-    ctx.setFillColor(color(0xE6DEFF)); ctx.fillPath()
+    ctx.setFillColor(color(0xFFF1CC)); ctx.fillPath()
 
     // Seta saindo da caixa (extração)
     let arrow = CGMutablePath()
@@ -86,12 +87,12 @@ func drawLogo(in ctx: CGContext, size s: CGFloat) {
     arrow.addLine(to: CGPoint(x: 402, y: 758))
     arrow.closeSubpath()
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 14, color: color(0x1A0B5C, 0.4))
+    ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 14, color: color(0x3D2B00, 0.35))
     ctx.setLineJoin(.round)
-    ctx.addPath(arrow); ctx.setFillColor(color(0xFFC83D)); ctx.fillPath()
+    ctx.addPath(arrow); ctx.setFillColor(color(0x5C3B00)); ctx.fillPath()
     ctx.restoreGState()
     ctx.addPath(arrow); ctx.clip()
-    let arrowGradient = CGGradient(colorsSpace: space, colors: [color(0xFFE07A), color(0xFFA51F)] as CFArray, locations: [0, 1])!
+    let arrowGradient = CGGradient(colorsSpace: space, colors: [color(0x7A5000), color(0x4A3000)] as CFArray, locations: [0, 1])!
     ctx.drawLinearGradient(arrowGradient, start: CGPoint(x: 0, y: 868), end: CGPoint(x: 0, y: 650), options: [])
 
     ctx.restoreGState()

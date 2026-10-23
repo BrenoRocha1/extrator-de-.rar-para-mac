@@ -6,13 +6,13 @@
 
 <p align="center">
   Abra arquivos <code>.rar</code> e compacte suas pastas no Mac, sem WinRAR: arraste, solte e pronto.<br>
-  <img src="https://img.shields.io/badge/macOS-14%2B-6B40F0" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/macOS-14%2B-F2A600" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Swift-SwiftUI-orange" alt="Swift">
 </p>
 
 <p align="center">
   <a href="https://github.com/BrenoRocha1/extrator-de-.rar-para-mac/releases/latest/download/Extrator-RAR.dmg">
-    <img src="https://img.shields.io/badge/Baixar%20para%20Mac-.dmg-6B40F0?style=for-the-badge&logo=apple&logoColor=white" alt="Baixar para Mac">
+    <img src="https://img.shields.io/badge/Baixar%20para%20Mac-.dmg-F2A600?style=for-the-badge&logo=apple&logoColor=white" alt="Baixar para Mac">
   </a>
 </p>
 
@@ -44,6 +44,11 @@ O macOS não vem com o WinRAR e não abre arquivos `.rar` sozinho. Este projeto 
 - **Nunca sobrescreve nada**: se já existir uma pasta com o mesmo nome, o app cria `nome 2`, `nome 3` e assim por diante.
 - **Abre a pasta no Finder ao terminar** (dá para desligar na janela).
 
+### Ajuda
+
+- **Boas-vindas na primeira abertura**: uma tela rápida explica como extrair, como compactar e como avisar de problemas. Ela aparece só uma vez.
+- **Reportar problema**: o botão no rodapé da janela (ou o menu **Ajuda → Reportar um problema…**) abre um e-mail já preenchido com a versão do app, a versão do macOS e o tipo de Mac, o que ajuda a corrigir o problema mais rápido.
+
 ### Compactar
 
 - **Transforme uma pasta em arquivo compactado**: arraste a pasta para a aba **Compactar** e escolha o formato.
@@ -51,8 +56,8 @@ O macOS não vem com o WinRAR e não abre arquivos `.rar` sozinho. Este projeto 
 
   | Formato | Quando usar | Senha | Partes |
   |---|---|---|---|
-  | `.zip` (padrão) | Para mandar para qualquer pessoa: abre em Mac, Windows e celular | ✅ AES-256 | ✅ |
-  | `.7z` | Para ocupar menos espaço | ✅ AES-256, esconde até os nomes dos arquivos | ✅ |
+  | `.zip` (padrão) | Para mandar para qualquer pessoa: abre em Mac, Windows e celular | Sim, AES-256 | Sim |
+  | `.7z` | Para ocupar menos espaço | Sim, AES-256, esconde até os nomes dos arquivos | Sim |
   | `.rar` | Quando alguém pede especificamente um `.rar` | Com o `rar` oficial ([veja abaixo](#opcional-rar-comprimido-com-senha-ou-em-partes)) | Com o `rar` oficial |
 
 - **Proteger com senha**: marque a opção e digite a senha. A senha nunca é salva pelo app.
@@ -86,7 +91,7 @@ Requisito das duas: **macOS 14 (Sonoma) ou mais novo**, em Mac com Apple Silicon
 4. **Abra o app pela primeira vez** (veja o aviso abaixo).
 5. Pronto. Pode ejetar o "Extrator RAR" que apareceu na barra lateral do Finder e apagar o `.dmg`.
 
-#### ⚠️ Aviso na primeira vez que abrir
+#### Aviso na primeira vez que abrir
 
 O app é gratuito e não foi publicado na App Store, então o macOS mostra um aviso parecido com *"Não foi possível verificar o app"*. Isso é normal e só acontece uma vez. Para liberar:
 
@@ -141,13 +146,13 @@ Como o app foi compilado no seu próprio Mac, o aviso da primeira abertura não 
 
 | | Sem o `rar` oficial | Com o `rar` oficial |
 |---|---|---|
-| Criar `.rar` | ✅ Sem compressão (o arquivo fica do mesmo tamanho) | ✅ Comprimido |
-| `.rar` com senha | ❌ Use `.zip` ou `.7z` com senha | ✅ |
-| `.rar` em partes | ❌ Use `.zip` ou `.7z` em partes | ✅ |
+| Criar `.rar` | Sim, sem compressão (o arquivo fica do mesmo tamanho) | Sim, comprimido |
+| `.rar` com senha | Não: use `.zip` ou `.7z` com senha | Sim |
+| `.rar` em partes | Não: use `.zip` ou `.7z` em partes | Sim |
 
 **Por quê?** O formato RAR pertence à RARLAB, a empresa do WinRAR. A estrutura do arquivo é documentada publicamente, e é com ela que o app cria `.rar` por conta própria. Já o algoritmo de compressão é fechado: só o programa oficial `rar` pode comprimir. O `.rar` sem compressão abre normalmente no WinRAR, no 7-Zip e em qualquer outro programa.
 
-> 💡 Na dúvida, use `.zip` ou `.7z`: fazem tudo (senha e partes) sem instalar nada.
+> **Na dúvida**, use `.zip` ou `.7z`: fazem tudo (senha e partes) sem instalar nada.
 
 Para instalar o `rar` oficial:
 
@@ -180,7 +185,7 @@ O `rar` é um programa *shareware* da RARLAB: dá para testar de graça, e a lic
 1. Abra o **Extrator RAR** (ele abre na aba **Extrair**).
 2. Arraste um ou mais arquivos `.rar` para a área tracejada, ou clique nela para escolher os arquivos.
 3. **Se o arquivo tiver senha**, uma janela vai pedir. Digite e clique em **Extrair**.
-4. Espere o ✓ verde aparecer na lista. O Finder abre mostrando o resultado.
+4. Espere o sinal de concluído (verde) aparecer na lista. O Finder abre mostrando o resultado.
 
 **Arquivo dividido em partes?** Deixe todas as partes juntas na mesma pasta e solte qualquer uma delas.
 
@@ -194,10 +199,10 @@ O `rar` é um programa *shareware* da RARLAB: dá para testar de graça, e a lic
 
 1. Abra o **Extrator RAR** e clique na aba **Compactar**.
 2. Escolha o formato: **.zip**, **.7z** ou **.rar**. Na dúvida, deixe **.zip**.
-3. (Opcional) Marque **Proteger com senha** e digite a senha. Clique no 👁 para conferir o que digitou.
+3. (Opcional) Marque **Proteger com senha** e digite a senha. Clique no ícone de olho para conferir o que digitou.
 4. (Opcional) Marque **Dividir em partes** e escolha o tamanho de cada parte.
 5. Arraste a pasta para a área tracejada, ou clique nela para escolher.
-6. Espere o ✓ verde. O arquivo novo aparece ao lado da pasta original, e o Finder mostra onde ele está.
+6. Espere o sinal de concluído (verde). O arquivo novo aparece ao lado da pasta original, e o Finder mostra onde ele está.
 
 **Pelo botão direito (mais rápido):**
 
@@ -210,6 +215,12 @@ O `rar` é um programa *shareware* da RARLAB: dá para testar de graça, e a lic
 **Atalho:** arrastar uma **pasta** para a aba **Extrair** também funciona. O app percebe que é uma pasta e compacta em vez de extrair.
 
 **Mandando para alguém no Windows?** `.zip` sem senha abre direto no Windows. `.zip` com senha usa criptografia AES-256, que o Windows abre com o 7-Zip ou o WinRAR (o descompactador que vem no Windows não abre AES).
+
+### Encontrou um problema?
+
+Clique em **Reportar problema**, no rodapé da janela, ou vá no menu **Ajuda → Reportar um problema…**. Vai abrir um e-mail para **brenohenrique91901@gmail.com** já com a versão do app e do macOS preenchidas: é só contar o que você estava fazendo e o que aconteceu.
+
+Se o Mac não tiver um app de e-mail configurado, o endereço é copiado e o app avisa: basta colar no seu e-mail (Gmail, Outlook…).
 
 ---
 
@@ -385,11 +396,13 @@ A pasta `vendor/`, criada pelo `build.sh` com o 7-Zip baixado, não vai para o G
 | `ExtratorRARApp` | Ponto de entrada do app (`@main`). Cria uma janela única. |
 | `AppDelegate` | Recebe os arquivos abertos pelo Finder, registra o serviço do botão direito e fecha o app quando a janela é fechada. |
 | `FinderService` | Atende o item "Compactar com Extrator RAR" do menu de Serviços do Finder. |
+| `Support` | Monta o e-mail de "Reportar problema" (`mailto:` com assunto e texto prontos, versão do app, do macOS e tipo de Mac). Se não houver app de e-mail, copia o endereço. |
+| `WelcomeView` | A tela de boas-vindas da primeira abertura. O app lembra que já mostrou guardando `welcomeShown` nas preferências. |
 | `ContentView` | A janela: cabeçalho com a logo, abas Extrair/Compactar, área de soltar, lista de atividade e rodapé com as opções. |
 | `FormatPicker` / `FormatChip` | A escolha de formato da aba Compactar, com uma explicação curta de cada um. |
 | `CompressExtras` | As opções "Proteger com senha" (com botão para mostrar a senha) e "Dividir em partes". Ficam desligadas no `.rar` quando o `rar` oficial não está instalado. |
 | `DropZone` | A área de soltar. Muda o texto e o ícone conforme a aba, fica grande quando a lista está vazia e vira uma barra compacta quando há tarefas. |
-| `JobRow` | Um cartão da lista: ícone colorido pelo status, nome, etiqueta do tipo ("extrair", "→ .zip 🔒 ✂︎"), barra de progresso ou erro, e botão "Abrir"/"Mostrar". |
+| `JobRow` | Um cartão da lista: ícone colorido pelo status, nome, etiqueta do tipo ("extrair" ou "→ .zip", com ícones de cadeado e de partes quando houver), barra de progresso ou erro, e botão "Abrir"/"Mostrar". |
 
 ### `Sources/Engine.swift` (o motor)
 
@@ -407,7 +420,7 @@ A pasta `vendor/`, criada pelo `build.sh` com o 7-Zip baixado, não vai para o G
 1. Na primeira vez, baixa o **7-Zip 26.04** do repositório oficial do autor (`github.com/ip7z/7zip`), confere o **SHA-256** do arquivo e guarda em `vendor/`. Se o arquivo não conferir, o build para.
 2. Compila os arquivos Swift com `swiftc -O -parse-as-library` duas vezes, uma para Apple Silicon (`arm64`) e outra para Intel (`x86_64`), e junta as duas com o `lipo`. O resultado é um app "universal" que roda em qualquer Mac.
 3. Copia o `Info.plist`, o `7zz` (para `Contents/MacOS`) e a licença do 7-Zip (para `Contents/Resources`).
-4. Roda o `MakeIcon.swift`, que desenha a logo (caixa com zíper e seta saindo) em vários tamanhos, e converte o resultado para `.icns` com o `iconutil`.
+4. Roda o `MakeIcon.swift`, que desenha a logo (caixa com zíper e seta saindo, no amarelo das pastas do Windows) em vários tamanhos, e converte o resultado para `.icns` com o `iconutil`.
 5. Assina o app inteiro, incluindo o 7-Zip, com uma assinatura local (`codesign --deep --sign -`), que o macOS exige para rodar apps em Macs com Apple Silicon.
 
 O projeto não usa Xcode nem `.xcodeproj`: basta o compilador de linha de comando.
