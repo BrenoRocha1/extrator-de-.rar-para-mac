@@ -14,6 +14,8 @@
   <a href="https://github.com/BrenoRocha1/extrator-de-.rar-para-mac/releases/latest/download/Extrator-RAR.dmg">
     <img src="https://img.shields.io/badge/Baixar%20para%20Mac-.dmg-F2A600?style=for-the-badge&logo=apple&logoColor=white" alt="Baixar para Mac">
   </a>
+  <br>
+  <a href="https://extrator-rar.vercel.app">extrator-rar.vercel.app</a>
 </p>
 
 O macOS não vem com o WinRAR e não abre arquivos `.rar` sozinho. Este projeto é um app nativo, pequeno e gratuito, que resolve isso **sem precisar instalar mais nada**:
