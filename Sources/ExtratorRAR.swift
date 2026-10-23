@@ -4,16 +4,20 @@ import UniformTypeIdentifiers
 
 // MARK: - App
 
+#if !SNAPSHOT
 @main
+#endif
 struct ExtratorRARApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
         Window("Extrator RAR", id: "main") {
             ContentView(model: Extractor.shared)
-                .frame(minWidth: 460, minHeight: 360)
+                .frame(minWidth: 440, minHeight: 500)
         }
-        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 520, height: 600)
     }
 }
 
@@ -42,6 +46,7 @@ final class Extractor: ObservableObject {
 
     @Published var jobs: [Job] = []
     @Published var openFolderWhenDone = true
+    let hasUnar = findTool("unar") != nil
     private var isRunning = false
 
     func enqueue(_ urls: [URL]) {
@@ -200,71 +205,231 @@ extension Job {
 
 // MARK: - Interface
 
+extension Color {
+    static let brand = Color(red: 0.42, green: 0.25, blue: 0.94)
+    static let brandLight = Color(red: 0.56, green: 0.36, blue: 1.0)
+}
+
 struct ContentView: View {
     @ObservedObject var model: Extractor
     @State private var isTargeted = false
 
+    /// Com arquivos na lista, a área de soltar encolhe para dar espaço à lista.
+    private var compact: Bool { !model.jobs.isEmpty }
+
     var body: some View {
-        VStack(spacing: 16) {
-            dropZone
-            if !model.jobs.isEmpty { jobList }
-            HStack {
-                Toggle("Abrir pasta ao terminar", isOn: $model.openFolderWhenDone)
-                Spacer()
-                if model.jobs.contains(where: \.isFinished) {
-                    Button("Limpar lista") { model.clearFinished() }
-                }
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 24)
+                .padding(.top, 34)  // espaço para os botões da janela (barra de título oculta)
+                .padding(.bottom, 18)
+
+            DropZone(compact: compact, isTargeted: isTargeted, action: chooseFiles)
+                .padding(.horizontal, 24)
+                .onDrop(of: [.fileURL], isTargeted: $isTargeted, perform: handleDrop)
+
+            if compact {
+                jobList
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .font(.callout)
+
+            Spacer(minLength: 0)
+            footer
         }
-        .padding(20)
+        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: compact)
+        .animation(.easeOut(duration: 0.15), value: isTargeted)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .ignoresSafeArea(edges: .top)
     }
 
-    private var dropZone: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "archivebox")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
-            Text("Arraste arquivos .rar aqui")
-                .font(.title3.weight(.medium))
-            Text("Também funciona com .zip, .7z, .tar, .gz…")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Button("Escolher arquivo…", action: chooseFiles)
-                .keyboardShortcut("o")
-                .padding(.top, 4)
-        }
-        .frame(maxWidth: .infinity, minHeight: 190)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
-                .foregroundStyle(isTargeted ? Color.accentColor : Color.secondary.opacity(0.4))
-                .background(RoundedRectangle(cornerRadius: 14).fill(isTargeted ? Color.accentColor.opacity(0.08) : .clear))
-        )
-        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
-            for provider in providers {
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    if let url { Task { @MainActor in model.enqueue([url]) } }
-                }
+    private var header: some View {
+        HStack(spacing: 14) {
+            Image(nsImage: NSApp?.applicationIconImage ?? NSImage())
+                .resizable()
+                .frame(width: 52, height: 52)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Extrator RAR")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                Text("Abra .rar, .zip, .7z e mais, direto no seu Mac")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-            return true
+            Spacer()
         }
     }
 
     private var jobList: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                ForEach(model.jobs) { job in JobRow(job: job) }
+        VStack(spacing: 10) {
+            HStack {
+                Text("Extrações")
+                    .font(.headline)
+                Text("\(model.jobs.count)")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                Spacer()
+                if model.jobs.contains(where: \.isFinished) {
+                    Button("Limpar concluídos") {
+                        withAnimation { model.clearFinished() }
+                    }
+                    .buttonStyle(.link)
+                    .font(.callout)
+                }
+            }
+            .padding(.horizontal, 24)
+
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(model.jobs) { job in
+                        JobRow(job: job)
+                            .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
+                .animation(.easeInOut(duration: 0.25), value: model.jobs.map(\.id))
             }
         }
-        .frame(maxHeight: 220)
+        .padding(.top, 22)
+    }
+
+    private var footer: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 12) {
+                Toggle("Abrir pasta ao terminar", isOn: $model.openFolderWhenDone)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .fixedSize()
+                Spacer(minLength: 0)
+                if !model.hasUnar {
+                    // Mostra a dica mais longa que couber na largura da janela.
+                    ViewThatFits {
+                        Label("Senha ou várias partes? brew install unar", systemImage: "info.circle")
+                        Label("brew install unar", systemImage: "info.circle")
+                        Image(systemName: "info.circle")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help("Para abrir RAR com senha ou dividido em partes, rode no Terminal: brew install unar")
+                }
+            }
+            .font(.callout)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+        }
+        .background(.bar)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url { Task { @MainActor in model.enqueue([url]) } }
+            }
+        }
+        return true
     }
 
     private func chooseFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
+        panel.message = "Escolha os arquivos para extrair"
+        panel.prompt = "Extrair"
         if panel.runModal() == .OK { model.enqueue(panel.urls) }
+    }
+}
+
+struct DropZone: View {
+    let compact: Bool
+    let isTargeted: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var highlighted: Bool { isTargeted || isHovering }
+    private var accent: Color { colorScheme == .dark ? .brandLight : .brand }
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if compact {
+                    HStack(spacing: 14) {
+                        badge(size: 44, iconSize: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(isTargeted ? "Solte para extrair" : "Arraste mais arquivos aqui")
+                                .font(.headline)
+                            Text("ou clique para escolher")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("⌘O")
+                            .font(.callout.monospaced())
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 18)
+                    .frame(height: 82)
+                } else {
+                    VStack(spacing: 14) {
+                        badge(size: 84, iconSize: 36)
+                        VStack(spacing: 4) {
+                            Text(isTargeted ? "Solte para extrair" : "Arraste seus arquivos aqui")
+                                .font(.system(size: 19, weight: .semibold, design: .rounded))
+                            Text("ou clique para escolher no Finder")
+                                .foregroundStyle(.secondary)
+                        }
+                        HStack(spacing: 6) {
+                            ForEach(["RAR", "ZIP", "7Z", "TAR", "GZ"], id: \.self) { ext in
+                                Text(ext)
+                                    .font(.caption2.weight(.bold).monospaced())
+                                    .foregroundStyle(accent)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(accent.opacity(colorScheme == .dark ? 0.2 : 0.12)))
+                            }
+                        }
+                        .padding(.top, 2)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 260, maxHeight: .infinity)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .background(background)
+            .contentShape(RoundedRectangle(cornerRadius: 18))
+            .scaleEffect(isTargeted ? 1.015 : 1)
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("o")
+        .onHover { isHovering = $0 }
+        .padding(.bottom, compact ? 0 : 24)
+    }
+
+    private func badge(size: CGFloat, iconSize: CGFloat) -> some View {
+        ZStack {
+            Circle()
+                .fill(LinearGradient(colors: [.brandLight, .brand], startPoint: .top, endPoint: .bottom))
+                .shadow(color: Color.brand.opacity(0.35), radius: highlighted ? 10 : 5, y: 3)
+            Image(systemName: isTargeted ? "arrow.down.to.line" : "arrow.down.doc.fill")
+                .font(.system(size: iconSize, weight: .semibold))
+                .foregroundStyle(.white)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .frame(width: size, height: size)
+        .scaleEffect(isTargeted ? 1.08 : 1)
+    }
+
+    private var background: some View {
+        RoundedRectangle(cornerRadius: 18)
+            .fill(accent.opacity(highlighted ? 0.12 : 0.06))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .strokeBorder(accent.opacity(highlighted ? 0.8 : (colorScheme == .dark ? 0.5 : 0.35)),
+                                  style: StrokeStyle(lineWidth: isTargeted ? 2 : 1.5, dash: isTargeted ? [] : [7, 5]))
+            )
     }
 }
 
@@ -272,37 +437,91 @@ struct JobRow: View {
     let job: Job
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            icon.frame(width: 20)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(job.archive.lastPathComponent).fontWeight(.medium).lineLimit(1)
-                detail.font(.caption).foregroundStyle(.secondary)
+        HStack(alignment: .center, spacing: 12) {
+            icon
+            VStack(alignment: .leading, spacing: 4) {
+                Text(job.archive.lastPathComponent)
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                detail
             }
-            Spacer()
-            if case .done(let folder) = job.status {
-                Button("Mostrar") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
-                    .controlSize(.small)
-            }
+            Spacer(minLength: 8)
+            trailing
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(borderColor, lineWidth: 1))
     }
 
-    @ViewBuilder private var icon: some View {
+    private var tint: Color {
         switch job.status {
-        case .waiting: Image(systemName: "clock").foregroundStyle(.secondary)
-        case .running: ProgressView().controlSize(.small)
-        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .failed: Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+        case .waiting: .secondary
+        case .running: .brand
+        case .done: .green
+        case .failed: .red
         }
+    }
+
+    private var borderColor: Color {
+        if case .failed = job.status { return .red.opacity(0.35) }
+        return Color.primary.opacity(0.07)
+    }
+
+    private var icon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9).fill(tint.opacity(0.14))
+            switch job.status {
+            case .waiting: Image(systemName: "clock")
+            case .running: ProgressView().controlSize(.small)
+            case .done: Image(systemName: "checkmark")
+            case .failed: Image(systemName: "exclamationmark.triangle.fill")
+            }
+        }
+        .font(.system(size: 15, weight: .bold))
+        .foregroundStyle(tint)
+        .frame(width: 36, height: 36)
     }
 
     @ViewBuilder private var detail: some View {
         switch job.status {
-        case .waiting: Text("Na fila")
-        case .running: Text(job.currentFile.isEmpty ? "Extraindo…" : job.currentFile).lineLimit(1).truncationMode(.middle)
-        case .done(let folder): Text("Extraído em \(folder.lastPathComponent)")
-        case .failed(let message): Text(message).textSelection(.enabled)
+        case .waiting:
+            Text("Na fila").font(.caption).foregroundStyle(.secondary)
+        case .running:
+            VStack(alignment: .leading, spacing: 5) {
+                ProgressView().progressViewStyle(.linear).tint(.brand)
+                Text(job.currentFile.isEmpty ? "Extraindo…" : job.currentFile)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        case .done(let folder):
+            Label(folder.lastPathComponent, systemImage: "folder.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        case .failed(let message):
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if case .done(let folder) = job.status {
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([folder])
+            } label: {
+                Label("Abrir", systemImage: "arrow.up.forward.app")
+            }
+            .controlSize(.small)
         }
     }
 }

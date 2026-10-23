@@ -1,17 +1,32 @@
-# Extrator RAR para macOS
+<p align="center">
+  <img src="assets/logo.png" width="160" alt="Logo do Extrator RAR">
+</p>
+
+<h1 align="center">Extrator RAR para macOS</h1>
+
+<p align="center">
+  Abra arquivos <code>.rar</code> no Mac sem WinRAR: arraste, solte e pronto.<br>
+  <img src="https://img.shields.io/badge/macOS-14%2B-6B40F0" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Swift-SwiftUI-orange" alt="Swift">
+</p>
 
 O macOS não vem com o WinRAR e não abre arquivos `.rar` sozinho. Este projeto é um app nativo, pequeno e gratuito, que resolve isso: você arrasta o `.rar` para a janela e ele é extraído.
 
 Além de `.rar` (RAR4 e RAR5), o app também abre `.zip`, `.7z`, `.tar`, `.gz` e outros formatos compactados.
 
-![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue) ![Swift](https://img.shields.io/badge/Swift-SwiftUI-orange)
+<p align="center">
+  <img src="assets/tela-inicial.png" width="380" alt="Tela inicial do app">
+  &nbsp;
+  <img src="assets/tela-extracoes.png" width="380" alt="Lista de extrações">
+</p>
 
 ---
 
 ## Funcionalidades
 
 - **Arrastar e soltar**: solte um ou vários arquivos na janela.
-- **Botão "Escolher arquivo…"** (ou `⌘O`) para escolher os arquivos numa janela de seleção.
+- **Clique para escolher** (ou `⌘O`): clicar na área de soltar abre uma janela de seleção de arquivos.
+- **Layout que se adapta**: sem arquivos, a área de soltar ocupa a janela; quando a extração começa, ela vira uma barra compacta e a lista ganha o espaço. A janela pode ser redimensionada e funciona no modo claro e no escuro.
 - **Integração com o Finder**: o app aparece em *Abrir com* quando você clica com o botão direito num `.rar`.
 - **Fila de extração**: os arquivos são extraídos um de cada vez, e cada um mostra seu status (na fila, extraindo, concluído ou erro).
 - **Progresso ao vivo**: mostra o nome do arquivo que está sendo extraído naquele momento.
@@ -62,8 +77,8 @@ brew install unar
 ## Como usar
 
 1. Abra o **Extrator RAR**.
-2. Arraste um ou mais arquivos `.rar` para a área tracejada, ou clique em **Escolher arquivo…**.
-3. Espere o ícone de concluído (✅). A pasta com os arquivos extraídos abre no Finder.
+2. Arraste um ou mais arquivos `.rar` para a área tracejada, ou clique nela para escolher os arquivos.
+3. Espere o ✓ verde aparecer na lista. A pasta com os arquivos extraídos abre no Finder.
 
 **Pelo Finder:** clique com o botão direito no `.rar` → **Abrir com** → **Extrator RAR**.
 
@@ -79,8 +94,8 @@ O arquivo pode chegar por três caminhos:
 
 | Origem | Onde no código |
 |---|---|
-| Arrastar para a janela | `ContentView.dropZone` → `.onDrop` |
-| Botão "Escolher arquivo…" | `ContentView.chooseFiles()` → `NSOpenPanel` |
+| Arrastar para a janela | `DropZone` → `.onDrop` → `ContentView.handleDrop` |
+| Clique na área de soltar ou `⌘O` | `ContentView.chooseFiles()` → `NSOpenPanel` |
 | Finder ("Abrir com" / duplo clique) | `AppDelegate.application(_:open:)` |
 
 Os três caminhos levam ao mesmo método: `Extractor.shared.enqueue(urls)`.
@@ -134,7 +149,7 @@ Se a mensagem de erro mencionar `password`, o app mostra uma janela pedindo a se
 
 ### 6. O resultado
 
-- **Deu certo**: o status vira `done`, aparece o botão **Mostrar** e, se a opção estiver ligada, a pasta abre no Finder.
+- **Deu certo**: o status vira `done`, aparece o botão **Abrir** e, se a opção estiver ligada, a pasta abre no Finder.
 - **Deu errado**: o app apaga a pasta de destino se ela tiver ficado vazia e mostra as últimas linhas do erro. Se o `unar` não estiver instalado, também sugere o `brew install unar`.
 
 ---
@@ -145,7 +160,8 @@ Se a mensagem de erro mencionar `password`, o app mostra uma janela pedindo a se
 .
 ├── Sources/
 │   ├── ExtratorRAR.swift   # O app inteiro: interface (SwiftUI) + lógica de extração
-│   └── MakeIcon.swift      # Script que gera o ícone do app durante o build
+│   └── MakeIcon.swift      # Desenha a logo do app (ícone .icns e assets/logo.png)
+├── assets/                 # Logo e capturas de tela usadas neste README
 ├── Info.plist              # Metadados do app e tipos de arquivo que ele abre
 ├── build.sh                # Compila e monta o "Extrator RAR.app"
 └── README.md
@@ -160,15 +176,16 @@ Se a mensagem de erro mencionar `password`, o app mostra uma janela pedindo a se
 | `Job` | Representa um arquivo na fila e o status dele. |
 | `Extractor` | O motor do app: fila, escolha da pasta, execução do `bsdtar`/`unar`, pedido de senha. |
 | `OutputBuffer` | Junta a saída do processo de forma segura entre threads. |
-| `ContentView` | A janela: área de soltar arquivos, lista de jobs e opções. |
-| `JobRow` | Uma linha da lista, com ícone, nome, progresso ou erro, e botão "Mostrar". |
+| `ContentView` | A janela: cabeçalho com a logo, área de soltar, lista de extrações e rodapé com as opções. |
+| `DropZone` | A área de soltar. Fica grande quando a lista está vazia e vira uma barra compacta quando há extrações. Reage ao passar o mouse e ao arrastar um arquivo por cima. |
+| `JobRow` | Um cartão da lista: ícone colorido pelo status, nome, barra de progresso ou erro, e botão "Abrir". |
 
 ### `build.sh`
 
 1. Apaga o `.app` anterior e cria a estrutura de pastas (`Contents/MacOS`, `Contents/Resources`).
 2. Compila o Swift com `swiftc -O -parse-as-library`.
 3. Copia o `Info.plist`.
-4. Roda o `MakeIcon.swift`, que desenha o ícone em vários tamanhos, e converte o resultado para `.icns` com o `iconutil`.
+4. Roda o `MakeIcon.swift`, que desenha a logo (caixa com zíper e seta saindo) em vários tamanhos, e converte o resultado para `.icns` com o `iconutil`.
 5. Assina o app com uma assinatura local (`codesign --sign -`), que o macOS exige para rodar apps em Macs com Apple Silicon.
 
 O projeto não usa Xcode nem `.xcodeproj`: basta o compilador de linha de comando.
