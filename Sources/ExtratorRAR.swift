@@ -13,45 +13,116 @@ struct ExtratorRARApp: App {
     var body: some Scene {
         Window("Extrator RAR", id: "main") {
             ContentView(model: Extractor.shared)
-                .frame(minWidth: 440, minHeight: 500)
+                .frame(minWidth: 440, minHeight: 540)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 520, height: 600)
+        .defaultSize(width: 520, height: 640)
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    // Arquivos abertos pelo Finder ("Abrir com" ou duplo clique).
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Botão direito numa pasta no Finder → Serviços → "Compactar com Extrator RAR"
+        NSApp.servicesProvider = FinderService()
+        NSUpdateDynamicServices()
+    }
+
+    // Arquivos e pastas abertos pelo Finder ("Abrir com", duplo clique ou soltos no ícone do Dock).
     func application(_ application: NSApplication, open urls: [URL]) {
-        Extractor.shared.enqueue(urls)
+        Extractor.shared.enqueue(urls, mode: .automatic)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
-// MARK: - Extração
+/// Recebe os itens enviados pelo menu de Serviços do Finder.
+final class FinderService: NSObject {
+    @objc func compressFiles(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        let urls = pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        Task { @MainActor in
+            NSApp.activate()
+            Extractor.shared.enqueue(urls, mode: .compress)
+        }
+    }
+}
+
+// MARK: - Formatos e tarefas
+
+enum ArchiveFormat: String, CaseIterable, Identifiable {
+    case zip, sevenZip = "7z", rar
+
+    var id: String { rawValue }
+    var fileExtension: String { rawValue }
+    var title: String { rawValue.uppercased() }
+
+    var summary: String {
+        switch self {
+        case .zip: "Abre em qualquer computador, sem instalar nada"
+        case .sevenZip: "Arquivo menor; o destino precisa do 7-Zip ou similar"
+        case .rar: "Formato do WinRAR; precisa do programa rar instalado"
+        }
+    }
+
+    /// ZIP e 7Z usam o bsdtar do macOS. RAR é um formato fechado: só o programa oficial `rar` cria.
+    var isAvailable: Bool { self != .rar || Extractor.findTool("rar") != nil }
+}
 
 struct Job: Identifiable {
+    enum Kind { case extract, compress(ArchiveFormat) }
     enum Status { case waiting, running, done(URL), failed(String) }
+
     let id = UUID()
-    let archive: URL
+    let source: URL
+    let kind: Kind
     var status: Status = .waiting
     var currentFile = ""
 }
+
+extension Job {
+    var isFinished: Bool {
+        switch status { case .done, .failed: true; default: false }
+    }
+
+    var isCompression: Bool {
+        if case .compress = kind { return true }
+        return false
+    }
+}
+
+// MARK: - Extração e compactação
 
 @MainActor
 final class Extractor: ObservableObject {
     static let shared = Extractor()
 
+    enum Mode { case automatic, extract, compress }
+
     @Published var jobs: [Job] = []
     @Published var openFolderWhenDone = true
+    @Published var format: ArchiveFormat {
+        didSet { UserDefaults.standard.set(format.rawValue, forKey: "format") }
+    }
     let hasUnar = findTool("unar") != nil
     private var isRunning = false
 
-    func enqueue(_ urls: [URL]) {
-        for url in urls where !jobs.contains(where: { $0.archive == url && !$0.isFinished }) {
-            jobs.append(Job(archive: url))
+    init() {
+        format = UserDefaults.standard.string(forKey: "format").flatMap(ArchiveFormat.init) ?? .zip
+    }
+
+    static let archiveExtensions: Set<String> = ["rar", "zip", "7z", "tar", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "cab", "lzh", "lha", "cpio", "xar"]
+
+    /// No modo automático, pastas e arquivos comuns são compactados e arquivos compactados são extraídos.
+    func enqueue(_ urls: [URL], mode: Mode) {
+        for url in urls where !jobs.contains(where: { $0.source == url && !$0.isFinished }) {
+            let isFolder = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let isArchive = Self.archiveExtensions.contains(url.pathExtension.lowercased())
+            let shouldExtract = switch mode {
+            case .extract: !isFolder
+            case .compress: false
+            case .automatic: !isFolder && isArchive
+            }
+            jobs.append(Job(source: url, kind: shouldExtract ? .extract : .compress(format)))
         }
         runNext()
     }
@@ -67,13 +138,17 @@ final class Extractor: ObservableObject {
         let job = jobs[index]
 
         Task.detached {
-            let result = await Self.extract(job.archive) { name in
+            let progress: @Sendable (String) -> Void = { name in
                 Task { @MainActor in self.update(job.id) { $0.currentFile = name } }
+            }
+            let result = switch job.kind {
+            case .extract: Self.extract(job.source, progress: progress)
+            case .compress(let format): Self.compress(job.source, as: format, progress: progress)
             }
             await MainActor.run {
                 self.update(job.id) { $0.status = result }
-                if case .done(let folder) = result, self.openFolderWhenDone {
-                    NSWorkspace.shared.activateFileViewerSelecting([folder])
+                if case .done(let output) = result, self.openFolderWhenDone {
+                    NSWorkspace.shared.activateFileViewerSelecting([output])
                 }
                 self.isRunning = false
                 self.runNext()
@@ -86,8 +161,13 @@ final class Extractor: ObservableObject {
     }
 
     /// Extrai para uma pasta ao lado do arquivo, com o mesmo nome dele.
-    nonisolated static func extract(_ archive: URL, progress: @escaping @Sendable (String) -> Void) async -> Job.Status {
-        let destination = uniqueFolder(for: archive)
+    nonisolated static func extract(_ archive: URL, progress: @escaping @Sendable (String) -> Void) -> Job.Status {
+        var name = archive.deletingPathExtension().lastPathComponent
+        // "filme.part1.rar" -> "filme"
+        if let range = name.range(of: #"\.part0*1$"#, options: [.regularExpression, .caseInsensitive]) {
+            name.removeSubrange(range)
+        }
+        let destination = uniqueURL(in: archive.deletingLastPathComponent(), name: name)
         do {
             try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         } catch {
@@ -114,12 +194,38 @@ final class Extractor: ObservableObject {
         if result.status == 0 { return .done(destination) }
 
         removeIfEmpty(destination)
-        var message = result.output.split(separator: "\n").suffix(3).joined(separator: "\n")
-        if message.isEmpty { message = "Erro desconhecido (código \(result.status))." }
+        var message = errorMessage(result)
         if findTool("unar") == nil {
             message += "\n\nDica: para RAR com senha ou dividido em partes, instale o unar no Terminal:\nbrew install unar"
         }
         return .failed(message)
+    }
+
+    /// Compacta uma pasta (ou arquivo) num arquivo ao lado dela: "Fotos" -> "Fotos.zip".
+    nonisolated static func compress(_ source: URL, as format: ArchiveFormat, progress: @escaping @Sendable (String) -> Void) -> Job.Status {
+        let parent = source.deletingLastPathComponent()
+        let isFolder = (try? source.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        let baseName = isFolder ? source.lastPathComponent : source.deletingPathExtension().lastPathComponent
+        let destination = uniqueURL(in: parent, name: baseName, extension: format.fileExtension)
+
+        let result: (status: Int32, output: String)
+        switch format {
+        case .zip, .sevenZip:
+            // -C entra na pasta de cima, assim o arquivo guarda "Fotos/..." e não o caminho inteiro.
+            result = run("/usr/bin/bsdtar", ["-c", "--format", format == .zip ? "zip" : "7zip", "--exclude", ".DS_Store",
+                                             "-v", "-f", destination.path, "-C", parent.path, source.lastPathComponent],
+                         progress: progress)
+        case .rar:
+            guard let rar = findTool("rar") else {
+                return .failed("Para criar .rar é preciso o programa oficial \"rar\" (da RARLAB, a empresa do WinRAR).\n\nEscolha ZIP, que abre em qualquer computador, ou veja no README como instalar o rar.")
+            }
+            // a = adicionar, -r = incluir subpastas, -ep1 = guardar só a partir de "Fotos/"
+            result = run(rar, ["a", "-r", "-ep1", "-x*.DS_Store", destination.path, source.path], progress: progress)
+        }
+
+        if result.status == 0 { return .done(destination) }
+        try? FileManager.default.removeItem(at: destination)
+        return .failed(errorMessage(result))
     }
 
     nonisolated private static func run(_ tool: String, _ args: [String], progress: @escaping @Sendable (String) -> Void) -> (status: Int32, output: String) {
@@ -135,9 +241,8 @@ final class Extractor: ObservableObject {
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             collected.append(text)
-            if let last = text.split(separator: "\n").last {
-                // bsdtar -v imprime "x caminho/do/arquivo"
-                progress(String(last.hasPrefix("x ") ? last.dropFirst(2) : last))
+            if let last = text.split(whereSeparator: \.isNewline).last {
+                progress(fileName(fromLogLine: String(last)))
             }
         }
 
@@ -147,17 +252,32 @@ final class Extractor: ObservableObject {
         return (process.terminationStatus, collected.text)
     }
 
-    nonisolated private static func uniqueFolder(for archive: URL) -> URL {
-        var name = archive.deletingPathExtension().lastPathComponent
-        // "filme.part1.rar" -> "filme"
-        if let range = name.range(of: #"\.part0*1$"#, options: [.regularExpression, .caseInsensitive]) {
-            name.removeSubrange(range)
+    /// bsdtar imprime "x arquivo" (extraindo) ou "a arquivo" (compactando); o rar imprime "Adding  arquivo  OK".
+    nonisolated private static func fileName(fromLogLine line: String) -> String {
+        var name = line.trimmingCharacters(in: .whitespaces)
+        if name.hasPrefix("x ") || name.hasPrefix("a ") { name.removeFirst(2) }
+        if name.hasPrefix("Adding") {
+            name = String(name.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            if name.hasSuffix("OK") { name = String(name.dropLast(2)).trimmingCharacters(in: .whitespaces) }
         }
-        let parent = archive.deletingLastPathComponent()
-        var candidate = parent.appendingPathComponent(name)
+        return name
+    }
+
+    nonisolated private static func errorMessage(_ result: (status: Int32, output: String)) -> String {
+        let message = result.output.split(separator: "\n").suffix(3).joined(separator: "\n")
+        return message.isEmpty ? "Erro desconhecido (código \(result.status))." : message
+    }
+
+    /// "Fotos" -> "Fotos 2" -> "Fotos 3"... até achar um nome livre.
+    nonisolated private static func uniqueURL(in parent: URL, name: String, extension ext: String? = nil) -> URL {
+        func url(_ base: String) -> URL {
+            let file = parent.appendingPathComponent(base)
+            return ext.map { file.appendingPathExtension($0) } ?? file
+        }
+        var candidate = url(name)
         var n = 2
         while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = parent.appendingPathComponent("\(name) \(n)")
+            candidate = url("\(name) \(n)")
             n += 1
         }
         return candidate
@@ -169,7 +289,7 @@ final class Extractor: ObservableObject {
         }
     }
 
-    nonisolated private static func findTool(_ name: String) -> String? {
+    nonisolated static func findTool(_ name: String) -> String? {
         ["/opt/homebrew/bin", "/usr/local/bin"]
             .map { "\($0)/\(name)" }
             .first { FileManager.default.isExecutableFile(atPath: $0) }
@@ -197,12 +317,6 @@ final class OutputBuffer: @unchecked Sendable {
     var text: String { lock.lock(); defer { lock.unlock() }; return storage }
 }
 
-extension Job {
-    var isFinished: Bool {
-        switch status { case .done, .failed: true; default: false }
-    }
-}
-
 // MARK: - Interface
 
 extension Color {
@@ -210,8 +324,14 @@ extension Color {
     static let brandLight = Color(red: 0.56, green: 0.36, blue: 1.0)
 }
 
+enum Tab: String, CaseIterable {
+    case extract = "Extrair"
+    case compress = "Compactar"
+}
+
 struct ContentView: View {
     @ObservedObject var model: Extractor
+    @State var tab: Tab = .extract
     @State private var isTargeted = false
 
     /// Com arquivos na lista, a área de soltar encolhe para dar espaço à lista.
@@ -222,9 +342,25 @@ struct ContentView: View {
             header
                 .padding(.horizontal, 24)
                 .padding(.top, 34)  // espaço para os botões da janela (barra de título oculta)
-                .padding(.bottom, 18)
+                .padding(.bottom, 16)
 
-            DropZone(compact: compact, isTargeted: isTargeted, action: chooseFiles)
+            Picker("Modo", selection: $tab) {
+                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.large)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 14)
+
+            if tab == .compress {
+                FormatPicker(format: $model.format)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 14)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            DropZone(tab: tab, compact: compact, isTargeted: isTargeted, action: chooseFiles)
                 .padding(.horizontal, 24)
                 .onDrop(of: [.fileURL], isTargeted: $isTargeted, perform: handleDrop)
 
@@ -237,6 +373,7 @@ struct ContentView: View {
             footer
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: compact)
+        .animation(.easeInOut(duration: 0.25), value: tab)
         .animation(.easeOut(duration: 0.15), value: isTargeted)
         .background(Color(nsColor: .windowBackgroundColor))
         .ignoresSafeArea(edges: .top)
@@ -250,7 +387,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Extrator RAR")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
-                Text("Abra .rar, .zip, .7z e mais, direto no seu Mac")
+                Text("Extraia e compacte arquivos, direto no seu Mac")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -261,7 +398,7 @@ struct ContentView: View {
     private var jobList: some View {
         VStack(spacing: 10) {
             HStack {
-                Text("Extrações")
+                Text("Atividade")
                     .font(.headline)
                 Text("\(model.jobs.count)")
                     .font(.caption.weight(.semibold).monospacedDigit())
@@ -303,7 +440,7 @@ struct ContentView: View {
                     .controlSize(.small)
                     .fixedSize()
                 Spacer(minLength: 0)
-                if !model.hasUnar {
+                if tab == .extract && !model.hasUnar {
                     // Mostra a dica mais longa que couber na largura da janela.
                     ViewThatFits {
                         Label("Senha ou várias partes? brew install unar", systemImage: "info.circle")
@@ -314,6 +451,15 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .help("Para abrir RAR com senha ou dividido em partes, rode no Terminal: brew install unar")
+                } else if tab == .compress {
+                    ViewThatFits {
+                        Label("Dica: botão direito na pasta → Serviços", systemImage: "cursorarrow.click.2")
+                        Image(systemName: "cursorarrow.click.2")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help("No Finder, clique com o botão direito numa pasta → Serviços → Compactar com Extrator RAR")
                 }
             }
             .font(.callout)
@@ -323,10 +469,13 @@ struct ContentView: View {
         .background(.bar)
     }
 
+    private var mode: Extractor.Mode { tab == .compress ? .compress : .automatic }
+
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        let mode = mode
         for provider in providers {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                if let url { Task { @MainActor in model.enqueue([url]) } }
+                if let url { Task { @MainActor in model.enqueue([url], mode: mode) } }
             }
         }
         return true
@@ -335,14 +484,72 @@ struct ContentView: View {
     private func chooseFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.message = "Escolha os arquivos para extrair"
-        panel.prompt = "Extrair"
-        if panel.runModal() == .OK { model.enqueue(panel.urls) }
+        if tab == .compress {
+            panel.canChooseDirectories = true
+            panel.message = "Escolha as pastas ou arquivos para compactar em .\(model.format.fileExtension)"
+            panel.prompt = "Compactar"
+        } else {
+            panel.canChooseDirectories = false
+            panel.message = "Escolha os arquivos para extrair"
+            panel.prompt = "Extrair"
+        }
+        if panel.runModal() == .OK { model.enqueue(panel.urls, mode: tab == .compress ? .compress : .extract) }
+    }
+}
+
+struct FormatPicker: View {
+    @Binding var format: ArchiveFormat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Formato")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                ForEach(ArchiveFormat.allCases) { option in
+                    FormatChip(format: option, selected: option == format) { format = option }
+                }
+                Spacer(minLength: 0)
+            }
+            Label(format.summary, systemImage: format.isAvailable ? "checkmark.circle" : "exclamationmark.circle")
+                .font(.caption)
+                .foregroundStyle(format.isAvailable ? Color.secondary : Color.orange)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct FormatChip: View {
+    let format: ArchiveFormat
+    let selected: Bool
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(".\(format.fileExtension)")
+                    .font(.callout.weight(.semibold).monospaced())
+                if !format.isAvailable {
+                    Image(systemName: "lock.fill").font(.caption2)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .foregroundStyle(selected ? Color.white : (colorScheme == .dark ? Color.brandLight : Color.brand))
+            .background(
+                Capsule().fill(selected ? Color.brand : Color.brand.opacity(colorScheme == .dark ? 0.2 : 0.1))
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(format.summary)
     }
 }
 
 struct DropZone: View {
+    let tab: Tab
     let compact: Bool
     let isTargeted: Bool
     let action: () -> Void
@@ -352,6 +559,25 @@ struct DropZone: View {
     private var highlighted: Bool { isTargeted || isHovering }
     private var accent: Color { colorScheme == .dark ? .brandLight : .brand }
 
+    private var title: String {
+        if isTargeted { return tab == .compress ? "Solte para compactar" : "Solte aqui" }
+        switch (tab, compact) {
+        case (.extract, false): return "Arraste seus arquivos aqui"
+        case (.extract, true): return "Arraste mais arquivos aqui"
+        case (.compress, false): return "Arraste uma pasta aqui"
+        case (.compress, true): return "Arraste mais pastas aqui"
+        }
+    }
+
+    private var subtitle: String {
+        tab == .compress ? "ou clique para escolher pastas e arquivos" : "ou clique para escolher no Finder"
+    }
+
+    private var icon: String {
+        if isTargeted { return "arrow.down.to.line" }
+        return tab == .compress ? "archivebox.fill" : "arrow.down.doc.fill"
+    }
+
     var body: some View {
         Button(action: action) {
             Group {
@@ -359,9 +585,8 @@ struct DropZone: View {
                     HStack(spacing: 14) {
                         badge(size: 44, iconSize: 20)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(isTargeted ? "Solte para extrair" : "Arraste mais arquivos aqui")
-                                .font(.headline)
-                            Text("ou clique para escolher")
+                            Text(title).font(.headline)
+                            Text(subtitle)
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
@@ -376,25 +601,33 @@ struct DropZone: View {
                     VStack(spacing: 14) {
                         badge(size: 84, iconSize: 36)
                         VStack(spacing: 4) {
-                            Text(isTargeted ? "Solte para extrair" : "Arraste seus arquivos aqui")
+                            Text(title)
                                 .font(.system(size: 19, weight: .semibold, design: .rounded))
-                            Text("ou clique para escolher no Finder")
+                            Text(subtitle)
                                 .foregroundStyle(.secondary)
                         }
-                        HStack(spacing: 6) {
-                            ForEach(["RAR", "ZIP", "7Z", "TAR", "GZ"], id: \.self) { ext in
-                                Text(ext)
-                                    .font(.caption2.weight(.bold).monospaced())
-                                    .foregroundStyle(accent)
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 3)
-                                    .background(Capsule().fill(accent.opacity(colorScheme == .dark ? 0.2 : 0.12)))
+                        if tab == .extract {
+                            HStack(spacing: 6) {
+                                ForEach(["RAR", "ZIP", "7Z", "TAR", "GZ"], id: \.self) { ext in
+                                    Text(ext)
+                                        .font(.caption2.weight(.bold).monospaced())
+                                        .foregroundStyle(accent)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 3)
+                                        .background(Capsule().fill(accent.opacity(colorScheme == .dark ? 0.2 : 0.12)))
+                                }
                             }
+                            .padding(.top, 2)
+                        } else {
+                            Text("O arquivo compactado é criado ao lado da pasta original")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .padding(.top, 2)
                         }
-                        .padding(.top, 2)
                     }
+                    .padding(.horizontal, 16)
                     .frame(maxWidth: .infinity)
-                    .frame(minHeight: 260, maxHeight: .infinity)
+                    .frame(minHeight: 240, maxHeight: .infinity)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -413,7 +646,7 @@ struct DropZone: View {
             Circle()
                 .fill(LinearGradient(colors: [.brandLight, .brand], startPoint: .top, endPoint: .bottom))
                 .shadow(color: Color.brand.opacity(0.35), radius: highlighted ? 10 : 5, y: 3)
-            Image(systemName: isTargeted ? "arrow.down.to.line" : "arrow.down.doc.fill")
+            Image(systemName: icon)
                 .font(.system(size: iconSize, weight: .semibold))
                 .foregroundStyle(.white)
                 .contentTransition(.symbolEffect(.replace))
@@ -440,10 +673,13 @@ struct JobRow: View {
         HStack(alignment: .center, spacing: 12) {
             icon
             VStack(alignment: .leading, spacing: 4) {
-                Text(job.archive.lastPathComponent)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(spacing: 6) {
+                    Text(job.source.lastPathComponent)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    kindBadge
+                }
                 detail
             }
             Spacer(minLength: 8)
@@ -456,6 +692,23 @@ struct JobRow: View {
                 .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
         )
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(borderColor, lineWidth: 1))
+    }
+
+    private var kindBadge: some View {
+        Text(kindLabel)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            .fixedSize()
+    }
+
+    private var kindLabel: String {
+        switch job.kind {
+        case .extract: "extrair"
+        case .compress(let format): "→ .\(format.fileExtension)"
+        }
     }
 
     private var tint: Color {
@@ -494,14 +747,14 @@ struct JobRow: View {
         case .running:
             VStack(alignment: .leading, spacing: 5) {
                 ProgressView().progressViewStyle(.linear).tint(.brand)
-                Text(job.currentFile.isEmpty ? "Extraindo…" : job.currentFile)
+                Text(job.currentFile.isEmpty ? (job.isCompression ? "Compactando…" : "Extraindo…") : job.currentFile)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-        case .done(let folder):
-            Label(folder.lastPathComponent, systemImage: "folder.fill")
+        case .done(let output):
+            Label(output.lastPathComponent, systemImage: job.isCompression ? "doc.zipper" : "folder.fill")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -515,11 +768,11 @@ struct JobRow: View {
     }
 
     @ViewBuilder private var trailing: some View {
-        if case .done(let folder) = job.status {
+        if case .done(let output) = job.status {
             Button {
-                NSWorkspace.shared.activateFileViewerSelecting([folder])
+                NSWorkspace.shared.activateFileViewerSelecting([output])
             } label: {
-                Label("Abrir", systemImage: "arrow.up.forward.app")
+                Label(job.isCompression ? "Mostrar" : "Abrir", systemImage: "arrow.up.forward.app")
             }
             .controlSize(.small)
         }
